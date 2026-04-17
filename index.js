@@ -3,33 +3,33 @@ const TelegramBot = require('node-telegram-bot-api');
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
-const userData = {};
+const users = {};
 
 // =====================
-// 📦 المنتجات (VIP)
+// 📦 المنتجات
 // =====================
 const products = {
-  binance: {
-    name: "💸 Binance (USDT)",
-    productId: 20498,
-    prices: [10, 20, 50, 100]
-  },
-  pubg: {
-    name: "🎮 PUBG UC",
-    productId: 12345,
-    prices: [5, 10, 25, 50]
-  },
-  google: {
-    name: "🎁 Google Play",
-    productId: 54321,
-    prices: [10, 25, 50, 100]
-  }
+  binance: { name: "💸 Binance", prices: [10, 20, 50] },
+  pubg: { name: "🎮 PUBG", prices: [5, 10, 25] },
+  google: { name: "🎁 Google Play", prices: [10, 25, 50] }
 };
 
 // =====================
-// 👋 START (VIP MENU)
+// 👤 إنشاء مستخدم
+// =====================
+function getUser(id) {
+  if (!users[id]) {
+    users[id] = { balance: 0 };
+  }
+  return users[id];
+}
+
+// =====================
+// 👋 START
 // =====================
 bot.onText(/\/start/, (msg) => {
+  getUser(msg.chat.id);
+
   bot.sendMessage(msg.chat.id,
 `💎 متجر VIP 👋
 
@@ -37,14 +37,15 @@ bot.onText(/\/start/, (msg) => {
 🎮 /pubg
 🎁 /google
 
-🏦 /balance`);
+💰 /balance`);
 });
 
 // =====================
-// 💰 BALANCE (وهمي مؤقت)
+// 💰 الرصيد
 // =====================
 bot.onText(/\/balance/, (msg) => {
-  bot.sendMessage(msg.chat.id, "💰 رصيدك: 10$");
+  const user = getUser(msg.chat.id);
+  bot.sendMessage(msg.chat.id, `💰 رصيدك: ${user.balance}$`);
 });
 
 // =====================
@@ -64,14 +65,14 @@ function showProduct(chatId, key) {
 }
 
 // =====================
-// 📦 أوامر المنتجات
+// 📦 أوامر
 // =====================
 bot.onText(/\/binance/, (msg) => showProduct(msg.chat.id, "binance"));
 bot.onText(/\/pubg/, (msg) => showProduct(msg.chat.id, "pubg"));
 bot.onText(/\/google/, (msg) => showProduct(msg.chat.id, "google"));
 
 // =====================
-// 🎯 CALLBACK
+// 🎯 شراء
 // =====================
 bot.on("callback_query", (query) => {
   const chatId = query.message.chat.id;
@@ -81,51 +82,40 @@ bot.on("callback_query", (query) => {
 
   if (!products[type]) return;
 
-  userData[chatId] = { type, price };
+  const user = getUser(chatId);
+
+  if (user.balance < price) {
+    return bot.sendMessage(chatId,
+      `❌ رصيدك غير كافي\nرصيدك: ${user.balance}$`
+    );
+  }
+
+  user.balance -= price;
 
   bot.sendMessage(chatId,
-`🧾 تأكيد الطلب:
+`✅ تم الشراء!
 
-📦 المنتج: ${products[type].name}
-💰 السعر: ${price}$
+📦 ${products[type].name}
+💰 ${price}$
 
-هل تريد المتابعة؟`,
-    {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "✅ تأكيد", callback_data: "confirm" }],
-          [{ text: "❌ إلغاء", callback_data: "cancel" }]
-        ]
-      }
-    }
+🔑 الكود:
+XXXX-XXXX-XXXX`
   );
 });
 
 // =====================
-// ✅ تأكيد / ❌ إلغاء
+// 👑 أمر سري لك (شحن)
 // =====================
-bot.on("callback_query", (query) => {
-  const chatId = query.message.chat.id;
+bot.onText(/\/add (.+)/, (msg, match) => {
+  const adminId = 1281070961; // 👈 ضع ايديك هنا
 
-  if (query.data === "confirm") {
-    const order = userData[chatId];
-    if (!order) return;
+  if (msg.from.id !== adminId) return;
 
-    bot.sendMessage(chatId,
-`✅ تم الشراء بنجاح!
+  const [userId, amount] = match[1].split(" ");
 
-📦 المنتج: ${products[order.type].name}
-💰 السعر: ${order.price}$
+  if (!users[userId]) users[userId] = { balance: 0 };
 
-🔑 الكود:
-XXXX-XXXX-XXXX`
-    );
+  users[userId].balance += parseInt(amount);
 
-    delete userData[chatId];
-  }
-
-  if (query.data === "cancel") {
-    delete userData[chatId];
-    bot.sendMessage(chatId, "❌ تم الإلغاء");
-  }
+  bot.sendMessage(msg.chat.id, "✅ تم شحن المستخدم");
 });
