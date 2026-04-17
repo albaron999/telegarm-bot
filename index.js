@@ -1,130 +1,153 @@
+require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
-// 🔐 بيانات Reloadly
-const CLIENT_ID = process.env.CLIENT_ID;
-const CLIENT_SECRET = process.env.CLIENT_SECRET;
+const userData = {};
 
-let accessToken = "";
+// =====================
+// 🛒 المنتجات (VIP)
+// =====================
+const products = {
+  binance: {
+    name: "Binance (USDT)",
+    productId: 20498,
+    prices: [10, 20, 50, 100, 200, 500]
+  },
+  pubg: {
+    name: "PUBG UC",
+    productId: 12345, // غيره لاحقاً
+    prices: [10, 25, 50, 100]
+  },
+  google: {
+    name: "Google Play",
+    productId: 54321, // غيره لاحقاً
+    prices: [10, 25, 50, 100]
+  }
+};
 
-// جلب توكن
+// =====================
+// 🔐 TOKEN
+// =====================
 async function getToken() {
-    const res = await axios.post("https://auth.reloadly.com/oauth/token", {
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        grant_type: "client_credentials",
-        audience: "https://topups.reloadly.com"
-    });
+  const res = await fetch("https://auth.reloadly.com/oauth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_id: process.env.RELOADLY_CLIENT_ID,
+      client_secret: process.env.RELOADLY_CLIENT_SECRET,
+      grant_type: "client_credentials",
+      audience: "https://giftcards.reloadly.com"
+    })
+  });
 
-    accessToken = res.data.access_token;
+  const data = await res.json();
+  return data.access_token;
 }
 
-// جلب الرصيد الحقيقي
+// =====================
+// 💰 BALANCE
+// =====================
 async function getBalance() {
-    const res = await axios.get("https://topups.reloadly.com/accounts/balance", {
-        headers: {
-            Authorization: `Bearer ${accessToken}`
-        }
+  try {
+    const token = await getToken();
+
+    const res = await fetch("https://giftcards.reloadly.com/accounts/balance", {
+      headers: { Authorization: `Bearer ${token}` }
     });
 
-    return res.data.balance;
+    const data = await res.json();
+    return data.balance;
+
+  } catch {
+    return null;
+  }
 }
 
-// تخزين طلبات فقط
-let orders = [];
-
-// 🔹 start
+// =====================
+// 👋 START
+// =====================
 bot.onText(/\/start/, (msg) => {
-    bot.sendMessage(msg.chat.id, `
-👋 متجر VIP
+  bot.sendMessage(msg.chat.id,
+`💎 متجر VIP
 
-💳 /binance
-💰 /balance (حقيقي)
-👑 /admin
-    `);
+🎁 اختر الخدمة:
+/binance
+/pubg
+/google
+
+🏦 /balance عرض الرصيد`
+  );
 });
 
-// 💰 رصيد حقيقي من Reloadly
+// =====================
+// 💰 BALANCE
+// =====================
 bot.onText(/\/balance/, async (msg) => {
-    try {
-        await getToken();
-        const balance = await getBalance();
-
-        bot.sendMessage(msg.chat.id, `💰 رصيدك الحقيقي: $${balance}`);
-    } catch (err) {
-        console.log(err.response?.data || err.message);
-        bot.sendMessage(msg.chat.id, "❌ خطأ في جلب الرصيد");
-    }
+  const balance = await getBalance();
+  bot.sendMessage(msg.chat.id, `💰 رصيدك: ${balance}$`);
 });
 
-// 💳 شراء (واجهة فقط حالياً)
-bot.onText(/\/binance/, (msg) => {
-    bot.sendMessage(msg.chat.id, "اختر السعر:", {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: "$10", callback_data: "buy_10" }],
-                [{ text: "$20", callback_data: "buy_20" }],
-                [{ text: "$50", callback_data: "buy_50" }]
-            ]
-        }
-    });
-});
+// =====================
+// 📦 عرض منتج
+// =====================
+function showProduct(chatId, key) {
+  const product = products[key];
 
-// الضغط على الأزرار (يسجل طلب فقط)
-bot.on("callback_query", (query) => {
-    const chatId = query.message.chat.id;
-    const data = query.data;
+  if (!product) {
+    return bot.sendMessage(chatId, "❌ المنتج غير موجود");
+  }
 
-    let amount = 0;
+  const keyboard = product.prices.map(p => ([{
+    text: `$${p}`,
+    callback_data: `${key}_${p}`
+  }]));
 
-    if (data === "buy_10") amount = 10;
-    if (data === "buy_20") amount = 20;
-    if (data === "buy_50") amount = 50;
+  bot.sendMessage(chatId,
+    `💳 ${product.name}\nاختر السعر:`,
+    { reply_markup: { inline_keyboard: keyboard } }
+  );
+}
 
-    // تسجيل الطلب
-    orders.push({
-        user: chatId,
-        amount: amount,
-        time: new Date()
-    });
+// =====================
+// 📌 أوامر المنتجات
+// =====================
+bot.onText(/\/binance/, (msg) => showProduct(msg.chat.id, "binance"));
+bot.onText(/\/pubg/, (msg) => showProduct(msg.chat.id, "pubg"));
+bot.onText(/\/google/, (msg) => showProduct(msg.chat.id, "google"));
 
-    bot.sendMessage(chatId, `📦 تم تسجيل طلب $${amount} (بانتظار التنفيذ)`);
-});
+// =====================
+// 🎯 CALLBACK
+// =====================
+bot.on("callback_query", async (q) => {
+  const chatId = q.message.chat.id;
+  const data = q.data;
 
-// 👑 ADMIN ID (غيره لايدك)
-const ADMIN_ID = 123456789;
+  // اختيار السعر
+  if (data.includes("_")) {
+    const [productKey, priceRaw] = data.split("_");
+    const price = parseInt(priceRaw);
 
-// لوحة التحكم
-bot.onText(/\/admin/, (msg) => {
-    if (msg.chat.id !== ADMIN_ID) {
-        return bot.sendMessage(msg.chat.id, "❌ غير مصرح");
-    }
+    userData[chatId] = {
+      productKey,
+      price: price + 2 // 💰 ربحك
+    };
 
-    bot.sendMessage(msg.chat.id, `
-👑 لوحة التحكم
+    return bot.sendMessage(chatId, "📧 ارسل ايميل المستلم:");
+  }
 
-/orders
-/balance
-    `);
-});
+  // تأكيد
+  if (data === "confirm") {
+    const user = userData[chatId];
+    if (!user) return;
 
-// عرض الطلبات
-bot.onText(/\/orders/, (msg) => {
-    if (msg.chat.id !== ADMIN_ID) return;
+    const { productKey, price, email, sender } = user;
+    const product = products[productKey];
 
-    if (orders.length === 0) {
-        return bot.sendMessage(msg.chat.id, "❌ لا يوجد طلبات");
-    }
+    bot.sendMessage(chatId, "⏳ جاري الشراء...");
 
-    let text = "📦 الطلبات:\n\n";
+    const balance = await getBalance();
 
-    orders.forEach((o, i) => {
-        text += `${i + 1}- ID: ${o.user} | $${o.amount}\n`;
-    });
-
-    bot.sendMessage(msg.chat.id, text);
-});
-
-console.log("VIP BOT WITH RELOADLY RUNNING...");
+    if (balance < price) {
+      delete userData[chatId];
+      return bot.sendMessage(chatId, "❌ ر
