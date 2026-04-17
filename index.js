@@ -1,163 +1,130 @@
-require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
+const axios = require('axios');
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
-const ADMIN_ID = 1281070961; // حط ايديك
+// 🔐 بيانات Reloadly
+const CLIENT_ID = process.env.CLIENT_ID;
+const CLIENT_SECRET = process.env.CLIENT_SECRET;
 
-const users = {};
-const userState = {};
-const orders = [];
+let accessToken = "";
 
-// =====================
-// 👤 المستخدم
-// =====================
-function getUser(id) {
-  if (!users[id]) {
-    users[id] = { balance: 0 };
-  }
-  return users[id];
-}
-
-// =====================
-// 👋 START
-// =====================
-bot.onText(/\/start/, (msg) => {
-  getUser(msg.chat.id);
-
-  bot.sendMessage(msg.chat.id,
-`💎 متجر VIP
-
-💸 /binance
-💰 /balance
-👑 /admin`);
-});
-
-// =====================
-// 💰 الرصيد
-// =====================
-bot.onText(/\/balance/, (msg) => {
-  const user = getUser(msg.chat.id);
-  bot.sendMessage(msg.chat.id, `💰 رصيدك: ${user.balance}$`);
-});
-
-// =====================
-// 💸 BINANCE
-// =====================
-bot.onText(/\/binance/, (msg) => {
-  const prices = [10, 20, 50];
-
-  const keyboard = prices.map(p => ([{
-    text: `$${p}`,
-    callback_data: `buy_${p}`
-  }]));
-
-  bot.sendMessage(msg.chat.id, "💸 اختر السعر:", {
-    reply_markup: { inline_keyboard: keyboard }
-  });
-});
-
-// =====================
-// 🎯 CALLBACK
-// =====================
-bot.on("callback_query", (q) => {
-  const chatId = q.message.chat.id;
-  const data = q.data;
-
-  if (data.startsWith("buy_")) {
-    const price = parseInt(data.split("_")[1]);
-
-    userState[chatId] = { price };
-
-    return bot.sendMessage(chatId,
-`🧾 تأكيد الطلب:
-
-💰 السعر: ${price}$`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "تأكيد", callback_data: "confirm" }],
-            [{ text: "إلغاء", callback_data: "cancel" }]
-          ]
-        }
-      }
-    );
-  }
-
-  if (data === "confirm") {
-    const state = userState[chatId];
-    if (!state) return;
-
-    const user = getUser(chatId);
-
-    if (user.balance < state.price) {
-      return bot.sendMessage(chatId, "رصيدك غير كافي");
-    }
-
-    user.balance -= state.price;
-
-    orders.push({
-      user: chatId,
-      price: state.price
+// جلب توكن
+async function getToken() {
+    const res = await axios.post("https://auth.reloadly.com/oauth/token", {
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        grant_type: "client_credentials",
+        audience: "https://topups.reloadly.com"
     });
 
-    delete userState[chatId];
+    accessToken = res.data.access_token;
+}
 
-    bot.sendMessage(chatId,
-`تم الشراء بنجاح
+// جلب الرصيد الحقيقي
+async function getBalance() {
+    const res = await axios.get("https://topups.reloadly.com/accounts/balance", {
+        headers: {
+            Authorization: `Bearer ${accessToken}`
+        }
+    });
 
-💰 ${state.price}$
+    return res.data.balance;
+}
 
-الكود:
-XXXX-XXXX`);
-  }
+// تخزين طلبات فقط
+let orders = [];
 
-  if (data === "cancel") {
-    delete userState[chatId];
-    bot.sendMessage(chatId, "تم الإلغاء");
-  }
+// 🔹 start
+bot.onText(/\/start/, (msg) => {
+    bot.sendMessage(msg.chat.id, `
+👋 متجر VIP
+
+💳 /binance
+💰 /balance (حقيقي)
+👑 /admin
+    `);
 });
 
-// =====================
-// 👑 ADMIN
-// =====================
-bot.onText(/\/admin/, (msg) => {
-  if (msg.from.id !== ADMIN_ID) return;
+// 💰 رصيد حقيقي من Reloadly
+bot.onText(/\/balance/, async (msg) => {
+    try {
+        await getToken();
+        const balance = await getBalance();
 
-  bot.sendMessage(msg.chat.id,
-`لوحة التحكم
+        bot.sendMessage(msg.chat.id, `💰 رصيدك الحقيقي: $${balance}`);
+    } catch (err) {
+        console.log(err.response?.data || err.message);
+        bot.sendMessage(msg.chat.id, "❌ خطأ في جلب الرصيد");
+    }
+});
+
+// 💳 شراء (واجهة فقط حالياً)
+bot.onText(/\/binance/, (msg) => {
+    bot.sendMessage(msg.chat.id, "اختر السعر:", {
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: "$10", callback_data: "buy_10" }],
+                [{ text: "$20", callback_data: "buy_20" }],
+                [{ text: "$50", callback_data: "buy_50" }]
+            ]
+        }
+    });
+});
+
+// الضغط على الأزرار (يسجل طلب فقط)
+bot.on("callback_query", (query) => {
+    const chatId = query.message.chat.id;
+    const data = query.data;
+
+    let amount = 0;
+
+    if (data === "buy_10") amount = 10;
+    if (data === "buy_20") amount = 20;
+    if (data === "buy_50") amount = 50;
+
+    // تسجيل الطلب
+    orders.push({
+        user: chatId,
+        amount: amount,
+        time: new Date()
+    });
+
+    bot.sendMessage(chatId, `📦 تم تسجيل طلب $${amount} (بانتظار التنفيذ)`);
+});
+
+// 👑 ADMIN ID (غيره لايدك)
+const ADMIN_ID = 123456789;
+
+// لوحة التحكم
+bot.onText(/\/admin/, (msg) => {
+    if (msg.chat.id !== ADMIN_ID) {
+        return bot.sendMessage(msg.chat.id, "❌ غير مصرح");
+    }
+
+    bot.sendMessage(msg.chat.id, `
+👑 لوحة التحكم
 
 /orders
-/add`);
+/balance
+    `);
 });
 
-// =====================
-// 📊 الطلبات
-// =====================
+// عرض الطلبات
 bot.onText(/\/orders/, (msg) => {
-  if (msg.from.id !== ADMIN_ID) return;
+    if (msg.chat.id !== ADMIN_ID) return;
 
-  if (orders.length === 0) {
-    return bot.sendMessage(msg.chat.id, "لا يوجد طلبات");
-  }
+    if (orders.length === 0) {
+        return bot.sendMessage(msg.chat.id, "❌ لا يوجد طلبات");
+    }
 
-  const list = orders.map(o =>
-    `ID: ${o.user} | ${o.price}$`
-  ).join("\n");
+    let text = "📦 الطلبات:\n\n";
 
-  bot.sendMessage(msg.chat.id, list);
+    orders.forEach((o, i) => {
+        text += `${i + 1}- ID: ${o.user} | $${o.amount}\n`;
+    });
+
+    bot.sendMessage(msg.chat.id, text);
 });
 
-// =====================
-// 💰 شحن
-// =====================
-bot.onText(/\/add (.+)/, (msg, match) => {
-  if (msg.from.id !== ADMIN_ID) return;
-
-  const [id, amount] = match[1].split(" ");
-
-  const user = getUser(id);
-  user.balance += parseInt(amount);
-
-  bot.sendMessage(msg.chat.id, "تم الشحن");
-});
+console.log("VIP BOT WITH RELOADLY RUNNING...");
