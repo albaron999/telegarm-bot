@@ -1,18 +1,14 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 
-const token = process.env.BOT_TOKEN;
+const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
-const bot = new TelegramBot(token, { polling: true });
-
-// ===== إعداد الأدمن =====
 const ADMIN_ID = 1281070961; //  حط ID حقك هنا
 
-// ===== تخزين مؤقت =====
-let users = {};
+let pending = {};
 let orders = [];
 
-// ===== جلب توكن Reloadly =====
+// ===== توكن Reloadly =====
 async function getToken() {
     try {
         const res = await axios.post(
@@ -24,23 +20,16 @@ async function getToken() {
                 audience: "https://giftcards.reloadly.com"
             }
         );
-
         return res.data.access_token;
     } catch (err) {
-        console.log("Token Error:", err.response?.data || err.message);
+        console.log(err.response?.data || err.message);
         return null;
     }
 }
 
-// ===== بدء =====
+// ===== start =====
 bot.onText(/\/start/, (msg) => {
-    const chatId = msg.chat.id;
-
-    if (!users[chatId]) {
-        users[chatId] = { balance: 0 };
-    }
-
-    bot.sendMessage(chatId,
+    bot.sendMessage(msg.chat.id,
         "متجر VIP\n\n" +
         "/binance\n" +
         "/balance\n" +
@@ -48,35 +37,28 @@ bot.onText(/\/start/, (msg) => {
     );
 });
 
-// ===== الرصيد الحقيقي =====
+// ===== الرصيد =====
 bot.onText(/\/balance/, async (msg) => {
     const chatId = msg.chat.id;
 
     const token = await getToken();
-
-    if (!token) {
-        return bot.sendMessage(chatId, "فشل الاتصال");
-    }
+    if (!token) return bot.sendMessage(chatId, "فشل الاتصال");
 
     try {
         const res = await axios.get(
             "https://giftcards.reloadly.com/accounts/balance",
             {
-                headers: {
-                    Authorization: `Bearer ${token}`
-                }
+                headers: { Authorization: `Bearer ${token}` }
             }
         );
 
         bot.sendMessage(chatId, "رصيدك: $" + res.data.balance);
-
     } catch (err) {
-        console.log(err.response?.data || err.message);
         bot.sendMessage(chatId, "خطأ في جلب الرصيد");
     }
 });
 
-// ===== شراء =====
+// ===== اختيار السعر =====
 bot.onText(/\/binance/, (msg) => {
     const chatId = msg.chat.id;
 
@@ -85,90 +67,111 @@ bot.onText(/\/binance/, (msg) => {
             inline_keyboard: [
                 [{ text: "$10", callback_data: "buy_10" }],
                 [{ text: "$20", callback_data: "buy_20" }],
-                [{ text: "$50", callback_data: "buy_50" }]
+                [{ text: "$50", callback_data: "buy_50" }],
+                [{ text: "$100", callback_data: "buy_100" }],
+                [{ text: "$200", callback_data: "buy_200" }],
+                [{ text: "$500", callback_data: "buy_500" }]
             ]
         }
     });
 });
 
-// ===== تنفيذ الشراء =====
+// ===== عند الضغط =====
 bot.on("callback_query", (query) => {
     const chatId = query.message.chat.id;
-    const data = query.data;
+    const amount = query.data.split("_")[1];
 
-    let amount = 0;
+    pending[chatId] = { amount };
 
-    if (data === "buy_10") amount = 10;
-    if (data === "buy_20") amount = 20;
-    if (data === "buy_50") amount = 50;
-
-    if (!users[chatId]) users[chatId] = { balance: 0 };
-
-    users[chatId].balance += amount;
-
-    orders.push({
-        user: chatId,
-        amount: amount,
-        time: new Date()
-    });
-
-    bot.sendMessage(chatId, "تم شحن $" + amount);
+    bot.sendMessage(chatId, "ادخل بريد المستلم:");
 });
 
-// ===== لوحة التحكم =====
-bot.onText(/\/admin/, (msg) => {
+// ===== استقبال البيانات =====
+bot.on("message", async (msg) => {
     const chatId = msg.chat.id;
 
-    if (chatId !== ADMIN_ID) {
-        return bot.sendMessage(chatId, "غير مصرح");
+    if (!pending[chatId]) return;
+
+    if (!pending[chatId].email) {
+        pending[chatId].email = msg.text;
+        return bot.sendMessage(chatId, "ادخل اسم المرسل:");
     }
 
-    bot.sendMessage(chatId,
+    if (!pending[chatId].sender) {
+        pending[chatId].sender = msg.text;
+
+        const { amount, email, sender } = pending[chatId];
+        delete pending[chatId];
+
+        await buyBinance(chatId, amount, email, sender);
+    }
+});
+
+// ===== تنفيذ الشراء =====
+async function buyBinance(chatId, amount, email, sender) {
+    const token = await getToken();
+    if (!token) return bot.sendMessage(chatId, "فشل الاتصال");
+
+    try {
+        const res = await axios.post(
+            "https://giftcards.reloadly.com/orders",
+            {
+                productId: 12, // 🔥 عدله بعد معرفة ID الصحيح
+                countryCode: "US",
+                quantity: 1,
+                unitPrice: amount,
+                recipientEmail: email,
+                senderName: sender
+            },
+            {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                }
+            }
+        );
+
+        orders.push({ chatId, amount, email });
+
+        bot.sendMessage(chatId,
+            "تم الشراء\n" +
+            "المبلغ: $" + amount + "\n" +
+            "الايميل: " + email
+        );
+
+    } catch (err) {
+        console.log(err.response?.data || err.message);
+        bot.sendMessage(chatId, "فشل الشراء");
+    }
+}
+
+// ===== admin =====
+bot.onText(/\/admin/, (msg) => {
+    if (msg.chat.id !== ADMIN_ID) {
+        return bot.sendMessage(msg.chat.id, "غير مصرح");
+    }
+
+    bot.sendMessage(msg.chat.id,
         "لوحة التحكم\n\n" +
-        "/orders\n" +
-        "/add"
+        "/orders"
     );
 });
 
-// ===== عرض الطلبات =====
+// ===== الطلبات =====
 bot.onText(/\/orders/, (msg) => {
-    const chatId = msg.chat.id;
-
-    if (chatId !== ADMIN_ID) {
-        return bot.sendMessage(chatId, "غير مصرح");
-    }
+    if (msg.chat.id !== ADMIN_ID) return;
 
     if (orders.length === 0) {
-        return bot.sendMessage(chatId, "لا يوجد طلبات");
+        return bot.sendMessage(msg.chat.id, "لا يوجد طلبات");
     }
 
     let text = "الطلبات:\n\n";
 
     orders.forEach((o, i) => {
-        text += `${i + 1}- ID: ${o.user} | $${o.amount}\n`;
+        text += `${i + 1}- $${o.amount} -> ${o.email}\n`;
     });
 
-    bot.sendMessage(chatId, text);
-});
-
-// ===== إضافة رصيد =====
-bot.onText(/\/add (.+)/, (msg, match) => {
-    const chatId = msg.chat.id;
-
-    if (chatId !== ADMIN_ID) {
-        return bot.sendMessage(chatId, "غير مصرح");
-    }
-
-    const args = match[1].split(" ");
-
-    const userId = args[0];
-    const amount = parseInt(args[1]);
-
-    if (!users[userId]) users[userId] = { balance: 0 };
-
-    users[userId].balance += amount;
-
-    bot.sendMessage(chatId, "تم إضافة $" + amount);
+    bot.sendMessage(msg.chat.id, text);
 });
 
 console.log("Bot is running...");
