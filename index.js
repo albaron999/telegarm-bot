@@ -116,7 +116,7 @@ async function buyBinance(chatId, amount, email, sender) {
         const res = await axios.post(
             "https://giftcards.reloadly.com/orders",
             {
-                productId: 12, // 🔥 عدله بعد معرفة ID الصحيح
+                productId: 20498, //  عدله بعد معرفة ID الصحيح
                 countryCode: "US",
                 quantity: 1,
                 unitPrice: amount,
