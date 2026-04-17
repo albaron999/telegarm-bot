@@ -1,3 +1,24 @@
+const axios = require("axios");
+const CLIENT_ID = process.env.RELOADLY_CLIENT_ID;
+const CLIENT_SECRET = process.env.RELOADLY_CLIENT_SECRET;
+async function getToken() {
+    try {
+        const res = await axios.post(
+            "https://auth.reloadly.com/oauth/token",
+            {
+                client_id: CLIENT_ID,
+                client_secret: CLIENT_SECRET,
+                grant_type: "client_credentials",
+                audience: "https://giftcards.reloadly.com"
+            }
+        );
+
+        return res.data.access_token;
+    } catch (err) {
+        console.log("Token Error:", err.response?.data || err.message);
+        return null;
+    }
+}
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 
@@ -60,16 +81,30 @@ bot.onText(/\/balance/, async (msg) => {
 });
 
 // 💳 شراء (واجهة فقط حالياً)
-bot.onText(/\/binance/, (msg) => {
-    bot.sendMessage(msg.chat.id, "اختر السعر:", {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: "$10", callback_data: "buy_10" }],
-                [{ text: "$20", callback_data: "buy_20" }],
-                [{ text: "$50", callback_data: "buy_50" }]
-            ]
-        }
-    });
+bot.onText(/\/balance/, async (msg) => {
+    const chatId = msg.chat.id;
+
+    const token = await getToken();
+
+    if (!token) {
+        return bot.sendMessage(chatId, "❌ فشل الاتصال");
+    }
+
+    try {
+        const res = await axios.get(
+            "https://giftcards.reloadly.com/accounts/balance",
+            {
+                headers: {
+                    Authorization: `Bearer ${token}`
+                }
+            }
+        );
+
+        bot.sendMessage(chatId, `💰 رصيدك الحقيقي: $${res.data.balance}`);
+    } catch (err) {
+        console.log(err.response?.data || err.message);
+        bot.sendMessage(chatId, "❌ خطأ في جلب الرصيد");
+    }
 });
 
 // الضغط على الأزرار (يسجل طلب فقط)
